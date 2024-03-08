@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build go1.5
 // +build go1.5
 
-//Enumer is a tool to generate Go code that adds useful methods to Go enums (constants with a specific type).
-//It started as a fork of Rob Pike’s Stringer tool
+// Enumer is a tool to generate Go code that adds useful methods to Go enums (constants with a specific type).
+// It started as a fork of Rob Pike’s Stringer tool
 //
-//Please visit http://github.com/alvaroloes/enumer for a comprehensive documentation
+// Please visit http://github.com/alvaroloes/enumer for a comprehensive documentation
 package main
 
 import (
@@ -20,13 +21,15 @@ import (
 	"go/importer"
 	"go/token"
 	"go/types"
-	"golang.org/x/tools/go/packages"
 	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/carlmjohnson/versioninfo"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/pascaldekloe/name"
 )
@@ -75,6 +78,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("enumer: ")
 	flag.Usage = Usage
+	versioninfo.AddFlag(nil)
 	flag.Parse()
 	if len(*typeNames) == 0 {
 		flag.Usage()
@@ -194,8 +198,8 @@ type Package struct {
 	typesPkg *types.Package
 }
 
-//// parsePackageDir parses the package residing in the directory.
-//func (g *Generator) parsePackageDir(directory string) {
+// // parsePackageDir parses the package residing in the directory.
+// func (g *Generator) parsePackageDir(directory string) {
 //	pkg, err := build.Default.ImportDir(directory, 0)
 //	if err != nil {
 //		log.Fatalf("cannot process directory %s: %s", directory, err)
@@ -209,15 +213,15 @@ type Package struct {
 //	names = append(names, pkg.SFiles...)
 //	names = prefixDirectory(directory, names)
 //	g.parsePackage(directory, names, nil)
-//}
+// }
 //
-//// parsePackageFiles parses the package occupying the named files.
-//func (g *Generator) parsePackageFiles(names []string) {
+// // parsePackageFiles parses the package occupying the named files.
+// func (g *Generator) parsePackageFiles(names []string) {
 //	g.parsePackage(".", names, nil)
-//}
+// }
 //
-//// prefixDirectory places the directory name on the beginning of each name in the list.
-//func prefixDirectory(directory string, names []string) []string {
+// // prefixDirectory places the directory name on the beginning of each name in the list.
+// func prefixDirectory(directory string, names []string) []string {
 //	if directory == "." {
 //		return names
 //	}
@@ -226,12 +230,12 @@ type Package struct {
 //		ret[i] = filepath.Join(directory, name)
 //	}
 //	return ret
-//}
+// }
 
-//// parsePackage analyzes the single package constructed from the named files.
-//// If text is non-nil, it is a string to be used instead of the content of the file,
-//// to be used for testing. parsePackage exits if there is an error.
-//func (g *Generator) parsePackage(directory string, names []string, text interface{}) {
+// // parsePackage analyzes the single package constructed from the named files.
+// // If text is non-nil, it is a string to be used instead of the content of the file,
+// // to be used for testing. parsePackage exits if there is an error.
+// func (g *Generator) parsePackage(directory string, names []string, text interface{}) {
 //	var files []*File
 //	var astFiles []*ast.File
 //	g.pkg = new(Package)
@@ -258,7 +262,7 @@ type Package struct {
 //	g.pkg.dir = directory
 //	// Type check the package.
 //	g.pkg.check(fs, astFiles)
-//}
+// }
 
 // parsePackage analyzes the single package constructed from the patterns and tags.
 // parsePackage exits if there is an error.
@@ -658,6 +662,7 @@ func (g *Generator) buildOneRun(runs [][]Value, typeName string) {
 }
 
 // Arguments to format are:
+//
 //	[1]: type name
 //	[2]: size of index element (8 for uint8 etc.)
 //	[3]: less than zero check (for signed types)
