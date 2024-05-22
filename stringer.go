@@ -48,7 +48,7 @@ func (af *arrayFlags) Set(value string) error {
 }
 
 var (
-	typeNames       = pflag.String("type", "", "comma-separated list of type names; must be set")
+	typeNames       = pflag.StringSlice("type", nil, "comma-separated list of type names; must be set")
 	sql             = pflag.Bool("sql", false, "if true, the Scanner and Valuer interface will be implemented.")
 	json            = pflag.Bool("json", false, "if true, json marshaling methods will be generated. Default: false")
 	yaml            = pflag.Bool("yaml", false, "if true, yaml marshaling methods will be generated. Default: false")
@@ -80,15 +80,11 @@ func Usage() {
 }
 
 func main() {
+	os.Args = preprocessArgs(os.Args)
 	log.SetFlags(0)
 	log.SetPrefix("enumer: ")
 	pflag.Usage = Usage
 	pflag.Parse()
-	if len(*typeNames) == 0 {
-		pflag.Usage()
-		os.Exit(2)
-	}
-	types := strings.Split(*typeNames, ",")
 
 	if *configPath != "" {
 		viper.SetConfigFile(*configPath)
@@ -107,17 +103,22 @@ func main() {
 		viper.BindPFlag("trimprefix", pflag.Lookup("trimprefix"))
 		viper.BindPFlag("linecomment", pflag.Lookup("linecomment"))
 
-		// Print the configuration values
-		fmt.Println("type:", viper.GetString("type"))
-		fmt.Println("sql:", viper.GetBool("sql"))
-		fmt.Println("json:", viper.GetBool("json"))
-		fmt.Println("yaml:", viper.GetBool("yaml"))
-		fmt.Println("text:", viper.GetBool("text"))
-		fmt.Println("output:", viper.GetString("output"))
-		fmt.Println("transform:", viper.GetString("transform"))
-		fmt.Println("trimprefix:", viper.GetString("trimprefix"))
-		fmt.Println("linecomment:", viper.GetBool("linecomment"))
+		typeNames = ptr(viper.GetStringSlice("type"))
+		sql = ptr(viper.GetBool("sql"))
+		json = ptr(viper.GetBool("json"))
+		yaml = ptr(viper.GetBool("yaml"))
+		text = ptr(viper.GetBool("text"))
+		output = ptr(viper.GetString("output"))
+		transformMethod = ptr(viper.GetString("transform"))
+		trimPrefix = ptr(viper.GetString("trimprefix"))
+		lineComment = ptr(viper.GetBool("linecomment"))
 	}
+
+	if len(*typeNames) == 0 && *configPath == "" {
+		pflag.Usage()
+		os.Exit(2)
+	}
+	enumTypes := *typeNames
 
 	// We accept either one directory or a list of files. Which do we have?
 	args := pflag.Args()
@@ -157,7 +158,7 @@ func main() {
 	g.Printf(")\n")
 
 	// Run generate for each type.
-	for _, typeName := range types {
+	for _, typeName := range enumTypes {
 		g.generate(typeName, *json, *yaml, *sql, *text, *transformMethod, *trimPrefix, *lineComment)
 	}
 
@@ -167,13 +168,13 @@ func main() {
 	// Figure out filename to write to
 	outputName := *output
 	if outputName == "" {
-		baseName := fmt.Sprintf("%s_enumer.go", types[0])
+		baseName := fmt.Sprintf("%s_enumer.go", enumTypes[0])
 		outputName = filepath.Join(dir, strings.ToLower(baseName))
 	}
 
 	// Write to tmpfile first
-	tmpName := fmt.Sprintf("%s_enumer_", filepath.Base(types[0]))
-	tmpFile, err := ioutil.TempFile(filepath.Dir(types[0]), tmpName)
+	tmpName := fmt.Sprintf("%s_enumer_", filepath.Base(enumTypes[0]))
+	tmpFile, err := ioutil.TempFile(filepath.Dir(enumTypes[0]), tmpName)
 	if err != nil {
 		log.Fatalf("creating temporary file for output: %s", err)
 	}
@@ -775,6 +776,13 @@ const stringMap = `func (i %[1]s) String() string {
 }
 `
 
+func stdlibDashCompat(f *pflag.FlagSet, name string) pflag.NormalizedName {
+	if strings.HasPrefix(name, "-") && !strings.HasPrefix(name, "--") {
+		return pflag.NormalizedName("-" + name)
+	}
+	return pflag.NormalizedName(name)
+}
+
 func printVersion(b bool) error {
 	if !b {
 		return nil
@@ -811,4 +819,21 @@ func (f boolFunc) Set(s string) error {
 		return err
 	}
 	return f(b)
+}
+
+// preprocessArgs converts stdlib flag single dashes into viper double dashes
+func preprocessArgs(args []string) []string {
+	var newArgs []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			newArgs = append(newArgs, "-"+arg)
+		} else {
+			newArgs = append(newArgs, arg)
+		}
+	}
+	return newArgs
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
