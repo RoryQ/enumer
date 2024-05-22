@@ -4,6 +4,7 @@
 
 // go command is not available on android
 
+//go:build !android
 // +build !android
 
 package main
@@ -26,13 +27,13 @@ import (
 // binary panics if the String method for X is not correct, including for error cases.
 
 func TestEndToEnd(t *testing.T) {
-	dir, err := ioutil.TempDir("", "stringer")
+	tempDir, err := ioutil.TempDir("", "stringer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer os.RemoveAll(tempDir)
 	// Create stringer in temporary directory.
-	stringer := filepath.Join(dir, "stringer.exe")
+	stringer := filepath.Join(tempDir, "stringer.exe")
 	err = run("go", "build", "-o", stringer)
 	if err != nil {
 		t.Fatalf("building stringer: %s", err)
@@ -66,8 +67,31 @@ func TestEndToEnd(t *testing.T) {
 			transformNameMethod = "snake"
 		}
 
-		stringerCompileAndRun(t, dir, stringer, typeName, name, transformNameMethod)
+		stringerCompileAndRun(t, tempDir, stringer, typeName, name, transformNameMethod)
 	}
+	t.Run("ConfigTest", func(t *testing.T) {
+		t.Logf("run: %s %s\n", "day.go", "day.yaml")
+		copyGoFile := filepath.Join(tempDir, "day.go")
+		err := copy(copyGoFile, filepath.Join("configtest", "day.go"))
+		if err != nil {
+			t.Fatalf("copying file to temporary directory: %s", err)
+		}
+		copyConfig := filepath.Join(tempDir, "day.yaml")
+		err = copy(copyConfig, filepath.Join("configtest", "day.yaml"))
+		if err != nil {
+			t.Fatalf("copying file to temporary directory: %s", err)
+		}
+		// Run stringer in temporary directory.
+		err = run(stringer, "-config", copyConfig, copyGoFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Run the binary in the temporary directory.
+		err = run("go", "run", filepath.Join(tempDir, "day_enumer.go"), copyGoFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // stringerCompileAndRun runs stringer for the named file and compiles and

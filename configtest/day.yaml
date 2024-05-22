@@ -1,0 +1,6 @@
+type:
+  # comments are ignored
+  - Day
+sql: true
+json: true
+yaml: true

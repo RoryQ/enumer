@@ -13,7 +13,6 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"go/ast"
 	exact "go/constant"
@@ -26,12 +25,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/carlmjohnson/versioninfo"
-	"golang.org/x/tools/go/packages"
-
 	"github.com/pascaldekloe/name"
+	pflag "github.com/spf13/pflag"
+	"github.com/spf13/viper"
+	"golang.org/x/tools/go/packages"
 )
 
 type arrayFlags []string
@@ -46,21 +48,24 @@ func (af *arrayFlags) Set(value string) error {
 }
 
 var (
-	typeNames       = flag.String("type", "", "comma-separated list of type names; must be set")
-	sql             = flag.Bool("sql", false, "if true, the Scanner and Valuer interface will be implemented.")
-	json            = flag.Bool("json", false, "if true, json marshaling methods will be generated. Default: false")
-	yaml            = flag.Bool("yaml", false, "if true, yaml marshaling methods will be generated. Default: false")
-	text            = flag.Bool("text", false, "if true, text marshaling methods will be generated. Default: false")
-	output          = flag.String("output", "", "output file name; default srcdir/<type>_enumer.go")
-	transformMethod = flag.String("transform", "noop", "enum item name transformation method. Default: noop")
-	trimPrefix      = flag.String("trimprefix", "", "transform each item name by removing a prefix. Default: \"\"")
-	lineComment     = flag.Bool("linecomment", false, "use line comment text as printed text when present")
+	typeNames       = pflag.StringSlice("type", nil, "comma-separated list of type names; must be set")
+	sql             = pflag.Bool("sql", false, "if true, the Scanner and Valuer interface will be implemented.")
+	json            = pflag.Bool("json", false, "if true, json marshaling methods will be generated. Default: false")
+	yaml            = pflag.Bool("yaml", false, "if true, yaml marshaling methods will be generated. Default: false")
+	text            = pflag.Bool("text", false, "if true, text marshaling methods will be generated. Default: false")
+	output          = pflag.String("output", "", "output file name; default srcdir/<type>_enumer.go")
+	transformMethod = pflag.String("transform", "noop", "enum item name transformation method. Default: noop")
+	trimPrefix      = pflag.String("trimprefix", "", "transform each item name by removing a prefix. Default: \"\"")
+	lineComment     = pflag.Bool("linecomment", false, "use line comment text as printed text when present")
+	configPath      = pflag.String("config", "", "config file")
 )
 
 var comments arrayFlags
 
 func init() {
-	flag.Var(&comments, "comment", "comments to include in generated code, can repeat. Default: \"\"")
+	pflag.StringSliceVar((*[]string)(&comments), "comment", nil, "comments to include in generated code, can repeat. Default: \"\"")
+	pflag.Var(boolFunc(printVersion), "v", "short alias for -version")
+	pflag.Var(boolFunc(printVersion), "version", "print version information and exit")
 }
 
 // Usage is a replacement usage function for the flags package.
@@ -71,23 +76,52 @@ func Usage() {
 	fmt.Fprintf(os.Stderr, "For more information, see:\n")
 	fmt.Fprintf(os.Stderr, "\thttps://github.com/alvaroloes/enumer\n")
 	fmt.Fprintf(os.Stderr, "Flags:\n")
-	flag.PrintDefaults()
+	pflag.PrintDefaults()
 }
 
 func main() {
+	os.Args = preprocessArgs(os.Args)
 	log.SetFlags(0)
 	log.SetPrefix("enumer: ")
-	flag.Usage = Usage
-	versioninfo.AddFlag(nil)
-	flag.Parse()
-	if len(*typeNames) == 0 {
-		flag.Usage()
+	pflag.Usage = Usage
+	pflag.Parse()
+
+	if *configPath != "" {
+		viper.SetConfigFile(*configPath)
+		if err := viper.ReadInConfig(); err != nil {
+			fmt.Printf("Error reading config file: %v\n", err)
+		}
+
+		// Bind flags to viper
+		viper.BindPFlag("type", pflag.Lookup("type"))
+		viper.BindPFlag("sql", pflag.Lookup("sql"))
+		viper.BindPFlag("json", pflag.Lookup("json"))
+		viper.BindPFlag("yaml", pflag.Lookup("yaml"))
+		viper.BindPFlag("text", pflag.Lookup("text"))
+		viper.BindPFlag("output", pflag.Lookup("output"))
+		viper.BindPFlag("transform", pflag.Lookup("transform"))
+		viper.BindPFlag("trimprefix", pflag.Lookup("trimprefix"))
+		viper.BindPFlag("linecomment", pflag.Lookup("linecomment"))
+
+		typeNames = ptr(viper.GetStringSlice("type"))
+		sql = ptr(viper.GetBool("sql"))
+		json = ptr(viper.GetBool("json"))
+		yaml = ptr(viper.GetBool("yaml"))
+		text = ptr(viper.GetBool("text"))
+		output = ptr(viper.GetString("output"))
+		transformMethod = ptr(viper.GetString("transform"))
+		trimPrefix = ptr(viper.GetString("trimprefix"))
+		lineComment = ptr(viper.GetBool("linecomment"))
+	}
+
+	if len(*typeNames) == 0 && *configPath == "" {
+		pflag.Usage()
 		os.Exit(2)
 	}
-	types := strings.Split(*typeNames, ",")
+	enumTypes := *typeNames
 
 	// We accept either one directory or a list of files. Which do we have?
-	args := flag.Args()
+	args := pflag.Args()
 	if len(args) == 0 {
 		// Default: process whole package in current directory.
 		args = []string{"."}
@@ -124,7 +158,7 @@ func main() {
 	g.Printf(")\n")
 
 	// Run generate for each type.
-	for _, typeName := range types {
+	for _, typeName := range enumTypes {
 		g.generate(typeName, *json, *yaml, *sql, *text, *transformMethod, *trimPrefix, *lineComment)
 	}
 
@@ -134,13 +168,13 @@ func main() {
 	// Figure out filename to write to
 	outputName := *output
 	if outputName == "" {
-		baseName := fmt.Sprintf("%s_enumer.go", types[0])
+		baseName := fmt.Sprintf("%s_enumer.go", enumTypes[0])
 		outputName = filepath.Join(dir, strings.ToLower(baseName))
 	}
 
 	// Write to tmpfile first
-	tmpName := fmt.Sprintf("%s_enumer_", filepath.Base(types[0]))
-	tmpFile, err := ioutil.TempFile(filepath.Dir(types[0]), tmpName)
+	tmpName := fmt.Sprintf("%s_enumer_", filepath.Base(enumTypes[0]))
+	tmpFile, err := ioutil.TempFile(filepath.Dir(enumTypes[0]), tmpName)
 	if err != nil {
 		log.Fatalf("creating temporary file for output: %s", err)
 	}
@@ -741,3 +775,65 @@ const stringMap = `func (i %[1]s) String() string {
 	return fmt.Sprintf("%[1]s(%%d)", i)
 }
 `
+
+func stdlibDashCompat(f *pflag.FlagSet, name string) pflag.NormalizedName {
+	if strings.HasPrefix(name, "-") && !strings.HasPrefix(name, "--") {
+		return pflag.NormalizedName("-" + name)
+	}
+	return pflag.NormalizedName(name)
+}
+
+func printVersion(b bool) error {
+	if !b {
+		return nil
+	}
+	fmt.Println("Version:", versioninfo.Version)
+	fmt.Println("Revision:", versioninfo.Revision)
+	if versioninfo.Revision != "unknown" {
+		fmt.Println("Committed:", versioninfo.LastCommit.Format(time.RFC1123))
+		if versioninfo.DirtyBuild {
+			fmt.Println("Dirty Build")
+		}
+	}
+	os.Exit(0)
+	panic("unreachable")
+}
+
+type boolFunc func(bool) error
+
+func (f boolFunc) Type() string {
+	return "bool"
+}
+
+func (f boolFunc) IsBoolFlag() bool {
+	return true
+}
+
+func (f boolFunc) String() string {
+	return ""
+}
+
+func (f boolFunc) Set(s string) error {
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	return f(b)
+}
+
+// preprocessArgs converts stdlib flag single dashes into viper double dashes
+func preprocessArgs(args []string) []string {
+	var newArgs []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			newArgs = append(newArgs, "-"+arg)
+		} else {
+			newArgs = append(newArgs, arg)
+		}
+	}
+	return newArgs
+}
+
+func ptr[T any](v T) *T {
+	return &v
+}
