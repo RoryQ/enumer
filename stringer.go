@@ -25,7 +25,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -58,14 +57,13 @@ var (
 	trimPrefix      = pflag.String("trimprefix", "", "transform each item name by removing a prefix. Default: \"\"")
 	lineComment     = pflag.Bool("linecomment", false, "use line comment text as printed text when present")
 	configPath      = pflag.String("config", "", "config file")
+	version         = pflag.BoolP("version", "v", false, "print version information and exit")
 )
 
 var comments arrayFlags
 
 func init() {
 	pflag.StringSliceVar((*[]string)(&comments), "comment", nil, "comments to include in generated code, can repeat. Default: \"\"")
-	pflag.Var(boolFunc(printVersion), "v", "short alias for -version")
-	pflag.Var(boolFunc(printVersion), "version", "print version information and exit")
 }
 
 // Usage is a replacement usage function for the flags package.
@@ -85,6 +83,7 @@ func main() {
 	log.SetPrefix("enumer: ")
 	pflag.Usage = Usage
 	pflag.Parse()
+	printVersion(*version)
 
 	if *configPath != "" {
 		viper.SetConfigFile(*configPath)
@@ -114,7 +113,7 @@ func main() {
 		lineComment = ptr(viper.GetBool("linecomment"))
 	}
 
-	if len(*typeNames) == 0 && *configPath == "" {
+	if len(*typeNames) == 0 {
 		pflag.Usage()
 		os.Exit(2)
 	}
@@ -776,16 +775,9 @@ const stringMap = `func (i %[1]s) String() string {
 }
 `
 
-func stdlibDashCompat(f *pflag.FlagSet, name string) pflag.NormalizedName {
-	if strings.HasPrefix(name, "-") && !strings.HasPrefix(name, "--") {
-		return pflag.NormalizedName("-" + name)
-	}
-	return pflag.NormalizedName(name)
-}
-
-func printVersion(b bool) error {
+func printVersion(b bool) {
 	if !b {
-		return nil
+		return
 	}
 	fmt.Println("Version:", versioninfo.Version)
 	fmt.Println("Revision:", versioninfo.Revision)
@@ -799,33 +791,11 @@ func printVersion(b bool) error {
 	panic("unreachable")
 }
 
-type boolFunc func(bool) error
-
-func (f boolFunc) Type() string {
-	return "bool"
-}
-
-func (f boolFunc) IsBoolFlag() bool {
-	return true
-}
-
-func (f boolFunc) String() string {
-	return ""
-}
-
-func (f boolFunc) Set(s string) error {
-	b, err := strconv.ParseBool(s)
-	if err != nil {
-		return err
-	}
-	return f(b)
-}
-
 // preprocessArgs converts stdlib flag single dashes into viper double dashes
 func preprocessArgs(args []string) []string {
 	var newArgs []string
 	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 2 {
 			newArgs = append(newArgs, "-"+arg)
 		} else {
 			newArgs = append(newArgs, arg)
