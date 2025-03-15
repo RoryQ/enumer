@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.5
-// +build go1.5
-
 // Enumer is a tool to generate Go code that adds useful methods to Go enums (constants with a specific type).
 // It started as a fork of Rob Pike’s Stringer tool
 //
@@ -13,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	exact "go/constant"
@@ -29,9 +27,11 @@ import (
 	"time"
 
 	"github.com/carlmjohnson/versioninfo"
+	kyaml "github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/basicflag"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 	"github.com/pascaldekloe/name"
-	pflag "github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -47,23 +47,24 @@ func (af *arrayFlags) Set(value string) error {
 }
 
 var (
-	typeNames       = pflag.StringSlice("type", nil, "comma-separated list of type names; must be set")
-	sql             = pflag.Bool("sql", false, "if true, the Scanner and Valuer interface will be implemented.")
-	json            = pflag.Bool("json", false, "if true, json marshaling methods will be generated. Default: false")
-	yaml            = pflag.Bool("yaml", false, "if true, yaml marshaling methods will be generated. Default: false")
-	text            = pflag.Bool("text", false, "if true, text marshaling methods will be generated. Default: false")
-	output          = pflag.String("output", "", "output file name; default srcdir/<type>_enumer.go")
-	transformMethod = pflag.String("transform", "noop", "enum item name transformation method. Default: noop")
-	trimPrefix      = pflag.String("trimprefix", "", "transform each item name by removing a prefix. Default: \"\"")
-	lineComment     = pflag.Bool("linecomment", false, "use line comment text as printed text when present")
-	configPath      = pflag.String("config", "", "config file")
-	version         = pflag.BoolP("version", "v", false, "print version information and exit")
+	version = flag.Bool("version", false, "print version information and exit")
+	k       = koanf.New(".")
 )
 
 var comments arrayFlags
 
 func init() {
-	pflag.StringSliceVar((*[]string)(&comments), "comment", nil, "comments to include in generated code, can repeat. Default: \"\"")
+	flag.Var(&comments, "comment", "comments to include in generated code, can repeat. Default: \"\"")
+	flag.String("type", "", "comma-separated list of type names; must be set")
+	flag.Bool("sql", false, "if true, the Scanner and Valuer interface will be implemented.")
+	flag.Bool("json", false, "if true, json marshaling methods will be generated. Default: false")
+	flag.Bool("yaml", false, "if true, yaml marshaling methods will be generated. Default: false")
+	flag.Bool("text", false, "if true, text marshaling methods will be generated. Default: false")
+	flag.String("output", "", "output file name; default srcdir/<type>_enumer.go")
+	flag.String("transform", "noop", "enum item name transformation method. Default: noop")
+	flag.String("trimprefix", "", "transform each item name by removing a prefix. Default: \"\"")
+	flag.Bool("linecomment", false, "use line comment text as printed text when present")
+	flag.String("config", "", "config file")
 }
 
 // Usage is a replacement usage function for the flags package.
@@ -74,54 +75,42 @@ func Usage() {
 	fmt.Fprintf(os.Stderr, "For more information, see:\n")
 	fmt.Fprintf(os.Stderr, "\thttps://github.com/alvaroloes/enumer\n")
 	fmt.Fprintf(os.Stderr, "Flags:\n")
-	pflag.PrintDefaults()
+	flag.PrintDefaults()
 }
 
 func main() {
-	unprocessedOsArgs := os.Args
-	os.Args = preprocessArgs(os.Args)
 	log.SetFlags(0)
 	log.SetPrefix("enumer: ")
-	pflag.Usage = Usage
-	pflag.Parse()
+	flag.Usage = Usage
+	flag.Parse()
 	printVersion(*version)
 
-	if *configPath != "" {
-		viper.SetConfigFile(*configPath)
-		if err := viper.ReadInConfig(); err != nil {
-			fmt.Printf("Error reading config file: %v\n", err)
+	err := k.Load(basicflag.ProviderWithValue(flag.CommandLine, ".", func(key string, value string) (string, interface{}) {
+		switch key {
+		case "type":
+			return key, strings.Split(value, ",")
+		default:
+			return key, value
 		}
-
-		// Bind flags to viper
-		viper.BindPFlag("type", pflag.Lookup("type"))
-		viper.BindPFlag("sql", pflag.Lookup("sql"))
-		viper.BindPFlag("json", pflag.Lookup("json"))
-		viper.BindPFlag("yaml", pflag.Lookup("yaml"))
-		viper.BindPFlag("text", pflag.Lookup("text"))
-		viper.BindPFlag("output", pflag.Lookup("output"))
-		viper.BindPFlag("transform", pflag.Lookup("transform"))
-		viper.BindPFlag("trimprefix", pflag.Lookup("trimprefix"))
-		viper.BindPFlag("linecomment", pflag.Lookup("linecomment"))
-
-		typeNames = ptr(viper.GetStringSlice("type"))
-		sql = ptr(viper.GetBool("sql"))
-		json = ptr(viper.GetBool("json"))
-		yaml = ptr(viper.GetBool("yaml"))
-		text = ptr(viper.GetBool("text"))
-		output = ptr(viper.GetString("output"))
-		transformMethod = ptr(viper.GetString("transform"))
-		trimPrefix = ptr(viper.GetString("trimprefix"))
-		lineComment = ptr(viper.GetBool("linecomment"))
+	}), nil)
+	if err != nil {
+		log.Fatalf("Error reading flags: %v\n", err)
 	}
 
-	if len(*typeNames) == 0 {
-		pflag.Usage()
+	if configPath := k.String("config"); configPath != "" {
+		if err := k.Load(file.Provider(configPath), kyaml.Parser()); err != nil {
+			fmt.Printf("Error loading config file: %v\n", err)
+		}
+	}
+
+	enumTypes := k.Strings("type")
+	if len(enumTypes) == 0 {
+		flag.Usage()
 		os.Exit(2)
 	}
-	enumTypes := *typeNames
 
 	// We accept either one directory or a list of files. Which do we have?
-	args := pflag.Args()
+	args := flag.Args()
 	if len(args) == 0 {
 		// Default: process whole package in current directory.
 		args = []string{"."}
@@ -142,31 +131,31 @@ func main() {
 	g.parsePackage(args)
 
 	// Print the header and package clause.
-	g.Printf("// Code generated by \"enumer %s\"; DO NOT EDIT.\n", strings.Join(unprocessedOsArgs[1:], " "))
+	g.Printf("// Code generated by \"enumer %s\"; DO NOT EDIT.\n", strings.Join(os.Args[1:], " "))
 	g.Printf("\n")
 	g.Printf("// %s\n", comments.String())
 	g.Printf("package %s", g.pkg.name)
 	g.Printf("\n")
 	g.Printf("import (\n")
 	g.Printf("\t\"fmt\"\n")
-	if *sql {
+	if k.Bool("sql") {
 		g.Printf("\t\"database/sql/driver\"\n")
 	}
-	if *json {
+	if k.Bool("json") {
 		g.Printf("\t\"encoding/json\"\n")
 	}
 	g.Printf(")\n")
 
 	// Run generate for each type.
 	for _, typeName := range enumTypes {
-		g.generate(typeName, *json, *yaml, *sql, *text, *transformMethod, *trimPrefix, *lineComment)
+		g.generate(typeName, k.Bool("json"), k.Bool("yaml"), k.Bool("sql"), k.Bool("text"), k.String("transform"), k.String("trimprefix"), k.Bool("linecomment"))
 	}
 
 	// Format the output.
 	src := g.format()
 
 	// Figure out filename to write to
-	outputName := *output
+	outputName := k.String("output")
 	if outputName == "" {
 		baseName := fmt.Sprintf("%s_enumer.go", enumTypes[0])
 		outputName = filepath.Join(dir, strings.ToLower(baseName))
@@ -790,21 +779,4 @@ func printVersion(b bool) {
 	}
 	os.Exit(0)
 	panic("unreachable")
-}
-
-// preprocessArgs converts stdlib flag single dashes into viper double dashes
-func preprocessArgs(args []string) []string {
-	var newArgs []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 2 {
-			newArgs = append(newArgs, "-"+arg)
-		} else {
-			newArgs = append(newArgs, arg)
-		}
-	}
-	return newArgs
-}
-
-func ptr[T any](v T) *T {
-	return &v
 }
